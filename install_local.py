@@ -43,6 +43,12 @@ def api_call(base: str, token: str, method: str, path: str, payload=None):
             content = resp.read()
             return json.loads(content) if content else None
     except error.HTTPError as exc:
+        if path == "/api/v1/auths/signin" and exc.code == 400:
+            raise InstallationError(
+                "Administrator sign-in was rejected (HTTP 400). WEBUI_ADMIN_PASSWORD "
+                "creates the initial account; changing it does not reset an existing "
+                "account password. Use the saved account password or a valid admin token."
+            ) from None
         if exc.code in (401, 403):
             raise InstallationError(
                 f"Open WebUI rejected the admin API key (HTTP {exc.code}). "

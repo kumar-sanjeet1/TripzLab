@@ -42,7 +42,10 @@ Optional: `TRIPZ_SUNBURST_API_KEY`, `TRIPZ_FLUX_API_KEY`,
 `TRIPZ_SUNBURST_DEPLOYMENT`, and `TRIPZ_FLUX_MODEL`. Deployment/model names must
 match Foundry. See `.env.example` and [DEPLOYMENT.md](DEPLOYMENT.md).
 
-Signups are disabled. Azure credentials remain on the backend. Bootstrap admin
+Signups are disabled. Azure credentials remain on the backend. Automatic model-import failures are logged without stopping Open WebUI.
+`WEBUI_ADMIN_EMAIL` and `WEBUI_ADMIN_PASSWORD` initialize a fresh database; changing
+these variables does not change an existing account. Change a saved password from
+the account settings while signed in. Bootstrap admin
 credentials must match the saved account for subsequent automatic imports. For
 MFA, use `TRIPZ_BOOTSTRAP_ADMIN_TOKEN`. To remove bootstrap credentials after
 installation, first set `TRIPZ_AUTO_INSTALL=false`; later source updates will
