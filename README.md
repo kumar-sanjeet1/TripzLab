@@ -1,7 +1,6 @@
 # TripzLab
 
-TripzSearch's image workspace, built on Open WebUI with two selectable Azure
-Foundry image models:
+TripzSearch's creative workspace, built on Open WebUI with Azure Foundry image models and an optional general chat connection:
 
 - **Tripz Image - GPT Image 2.5 Sunburst**
 - **Tripz Image - FLUX.2 Pro**
@@ -14,7 +13,34 @@ Instagram portrait (`1536x1920`). Sunburst defaults to `xhigh` quality.
 Each model calls its own Azure API. The Pipe uses the latest user prompt directly,
 skips background title/tag requests, validates image bytes, and saves the original
 to the signed-in user's Open WebUI storage. Generated messages show the actual
-output dimensions. This version supports text-to-image generation.
+output dimensions. Sunburst supports both new images and reference-image edits.
+
+## Reference images and follow-up edits
+
+Select **Tripz Image - GPT Image 2.5 Sunburst**, attach PNG, JPEG, or WebP images,
+and describe what to change. Explicit references use Azure's image-edit API.
+You can upload up to 16 reference images (32 MB each, 64 MB total).
+
+For follow-up edits without another upload, Sunburst reuses the last generated
+image in the chat. Start a new chat or disable **USE_PREVIOUS_IMAGE** in User
+Valves for independent generations. The original preview/download flow is kept.
+Reference editing is currently wired for Sunburst; the FLUX option generates new
+images from text.
+
+## General chat
+
+Set `TRIPZ_CHAT_AUTO_SETUP=true` to add a native Azure text-model connection. It
+uses the shared Azure resource key, or `TRIPZ_CHAT_API_KEY` for a separate resource.
+`TRIPZ_CHAT_BASE_URL` defaults to the image resource's `/openai/v1` base URL.
+
+Set `TRIPZ_CHAT_DEPLOYMENT` to the exact Azure text deployment name. If omitted,
+setup checks Azure's model list and prefers a GPT Sol model when one is listed.
+The candidate must answer a test request through Open WebUI before it is kept.
+A failed test restores the previous connection configuration.
+
+The text model appears as **tripz-chat.<deployment>** in the ordinary selector.
+Use it for captions, scripts, prompt writing, and general assistance. Image
+models stay separately selectable. Existing provider connections are preserved.
 
 ## Railway
 

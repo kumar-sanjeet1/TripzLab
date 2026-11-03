@@ -27,7 +27,7 @@ class InstallationError(Exception):
     pass
 
 
-def api_call(base: str, token: str, method: str, path: str, payload=None):
+def api_call(base: str, token: str, method: str, path: str, payload=None, *, timeout: float = 25):
     encoded = None if payload is None else json.dumps(payload).encode("utf-8")
     req = request.Request(
         f"{base.rstrip('/')}{path}",
@@ -39,7 +39,7 @@ def api_call(base: str, token: str, method: str, path: str, payload=None):
         },
     )
     try:
-        with request.urlopen(req, timeout=25) as resp:
+        with request.urlopen(req, timeout=timeout) as resp:
             content = resp.read()
             return json.loads(content) if content else None
     except error.HTTPError as exc:

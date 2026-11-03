@@ -56,12 +56,6 @@ async def test_unknown_models_do_not_fall_back_to_sunburst():
 
 
 @pytest.mark.asyncio
-async def test_attached_files_are_not_silently_ignored():
-    with pytest.raises(studio.ImageStudioError, match="editing"):
-        await studio.Pipe().pipe({}, __files__=[{"id": "a-reference-image"}])
-
-
-@pytest.mark.asyncio
 async def test_environment_deployment_override(monkeypatch):
     recorded = {}
     monkeypatch.setenv("TRIPZ_SUNBURST_DEPLOYMENT", "my-deployment")

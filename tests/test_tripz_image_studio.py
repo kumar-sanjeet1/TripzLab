@@ -29,6 +29,8 @@ def fake_open_webui(monkeypatch, recorded, *, image_url=None):
         "open_webui.models.config",
         "open_webui.models.users",
         "open_webui.routers.images",
+        "open_webui.utils",
+        "open_webui.utils.files",
     ):
         mod = types.ModuleType(name)
         mod.__path__ = []
@@ -61,10 +63,17 @@ def fake_open_webui(monkeypatch, recorded, *, image_url=None):
         recorded["fetched_url"] = url
         return make_img("PNG"), "image/png"
 
+    async def get_image_base64_from_file_id(file_id, user=None):
+        recorded.setdefault("reference_reads", []).append((file_id, user.id if user else None))
+        if file_id == "unreadable-file":
+            return None
+        return "data:image/png;base64," + base64.b64encode(make_img()).decode()
+
     packages["open_webui.models.config"].Config = Config
     packages["open_webui.models.users"].Users = Users
     packages["open_webui.routers.images"].upload_image = upload_image
     packages["open_webui.routers.images"].get_image_data = get_image_data
+    packages["open_webui.utils.files"].get_image_base64_from_file_id = get_image_base64_from_file_id
     return packages
 
 
@@ -216,12 +225,13 @@ def test_last_user_prompt_ignores_old_chat_messages():
     assert studio._last_user_prompt(messages) == "latest scene"
 
 
-def test_reference_edits_not_silently_ignored():
-    with pytest.raises(studio.ImageStudioError, match="editing"):
-        studio._last_user_prompt([{"role": "user", "content": [
-            {"type": "text", "text": "Make this brighter"},
-            {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}},
-        ]}])
+def test_reference_prompt_and_sources_are_separate():
+    messages = [{"role": "user", "content": [
+        {"type": "text", "text": "Make this brighter"},
+        {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}},
+    ]}]
+    assert studio._last_user_prompt(messages) == "Make this brighter"
+    assert studio._reference_sources(messages, None, False) == ["data:image/png;base64,abc"]
 
 
 def test_unexpected_response_format():

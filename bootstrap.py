@@ -11,7 +11,10 @@ from install_local import FUNCTION_ID, FUNCTION_SOURCE, InstallationError, api_c
 
 
 def main():
-    if os.getenv("TRIPZ_AUTO_INSTALL", "true").lower() != "true":
+    image_setup = os.getenv("TRIPZ_AUTO_INSTALL", "true").lower() == "true"
+    chat_setup = os.getenv("TRIPZ_CHAT_AUTO_SETUP", "false").lower() == "true"
+    edit_check = bool(os.getenv("TRIPZ_EDIT_SMOKE_TEST_ID", "").strip())
+    if not (image_setup or chat_setup or edit_check):
         print("Tripz automatic import disabled; existing database Function is retained.")
         return
     email = os.getenv("WEBUI_ADMIN_EMAIL", "").strip()
@@ -38,6 +41,23 @@ def main():
         token = (auth or {}).get("token", "")
         if not token:
             raise InstallationError("Admin sign-in did not return a token. Complete MFA in the UI and use a bootstrap token.")
+    if image_setup:
+        ensure_image_pipe(base, token)
+    if chat_setup:
+        try:
+            from setup_chat import setup_chat
+            setup_chat(base, token)
+        except InstallationError as exc:
+            print(f"Tripz chat setup: {exc}")
+    if edit_check:
+        try:
+            from verify_edits import verify_edits
+            verify_edits(base, token)
+        except Exception:
+            print("Tripz reference-edit verification did not pass. Inspect the saved verification report.")
+
+
+def ensure_image_pipe(base, token):
     functions = api_call(base, token, "GET", "/api/v1/functions/list")
     existing = next((f for f in functions if f.get("id") == FUNCTION_ID), None)
     if existing:

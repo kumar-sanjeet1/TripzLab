@@ -1,7 +1,7 @@
 """
 title: TripzSearch Azure Image Studio
 author: TripzSearch
-version: 0.2.0
+version: 0.3.0
 description: Two selectable Azure Foundry image generators: GPT Image 2.5 Sunburst and FLUX.2 Pro.
 requirements: httpx
 
@@ -13,9 +13,11 @@ Open WebUI Images settings.
 
 import base64
 import binascii
+import hashlib
 import inspect
 import io
 import os
+import re
 from typing import Literal
 from urllib.parse import urlparse
 
@@ -75,13 +77,6 @@ def _last_user_prompt(messages: list) -> str:
                 for item in content
                 if isinstance(item, dict) and item.get("type") == "text"
             )
-            if any(
-                isinstance(item, dict) and item.get("type") in ("image_url", "image")
-                for item in content
-            ):
-                raise ImageStudioError(
-                    "This version generates new images from text. Reference-image editing is not enabled yet."
-                )
         else:
             continue
         prompt = prompt.strip()
@@ -91,6 +86,85 @@ def _last_user_prompt(messages: list) -> str:
             raise ImageStudioError("The prompt is too long (maximum 32,000 characters).")
         return prompt
     raise ImageStudioError("Enter an image description before pressing Send.")
+
+
+def _reference_sources(messages: list, files: list | None, use_previous: bool) -> list[str]:
+    """Read explicit uploads first; optionally continue from the last generated image."""
+    sources = []
+    last_user = next((m for m in reversed(messages) if m.get("role") == "user"), {})
+    content = last_user.get("content", [])
+    if isinstance(content, list):
+        for part in content:
+            if not isinstance(part, dict) or part.get("type") not in {"image_url", "image"}:
+                continue
+            value = part.get("image_url") or part.get("url")
+            if isinstance(value, dict):
+                value = value.get("url")
+            if isinstance(value, str) and value:
+                sources.append(value)
+            else:
+                raise ImageStudioError("A reference image has no usable source. Attach the image again.")
+    for item in files or []:
+        if not isinstance(item, dict):
+            continue
+        file = item.get("file") if isinstance(item.get("file"), dict) else {}
+        value = file.get("id") or item.get("url") or item.get("id")
+        if isinstance(value, str) and value:
+            sources.append(value)
+    if not sources and use_previous:
+        for message in reversed(messages):
+            if message.get("role") != "assistant" or not isinstance(message.get("content"), str):
+                continue
+            match = re.search(r"!\[Generated with [^\]]+\]\((/api/v1/files/[^/?#)]+/content)\)", message["content"])
+            if match:
+                sources.append(match.group(1))
+                break
+    # A local file may be represented both by its ID and by its content URL.
+    normalized = []
+    for value in sources:
+        if not value.startswith("data:"):
+            parsed = urlparse(value)
+            match = re.fullmatch(r"/api/v1/files/([A-Za-z0-9_-]+)/content", parsed.path)
+            if match:
+                value = match.group(1)
+            elif not re.fullmatch(r"[A-Za-z0-9_-]+", value):
+                raise ImageStudioError("Upload reference images with the attachment button. External image links are not supported here.")
+        if value not in normalized:
+            normalized.append(value)
+    if len(normalized) > 16:
+        raise ImageStudioError("Use at most 16 reference images in one request.")
+    return normalized
+
+
+async def _load_references(sources: list[str], user) -> list[tuple[bytes, str]]:
+    """Resolve local files through Open WebUI's ownership and read-access checks."""
+    references = []
+    seen = set()
+    total = 0
+    for source in sources:
+        if source.startswith("data:"):
+            if not source.startswith("data:image/"):
+                raise ImageStudioError("Reference attachments must be PNG, JPEG, or WebP images.")
+            encoded = source
+        else:
+            from open_webui.utils.files import get_image_base64_from_file_id
+
+            encoded = get_image_base64_from_file_id(source, user=user)
+            if inspect.isawaitable(encoded):
+                encoded = await encoded
+            if not encoded:
+                raise ImageStudioError("A reference image is unavailable or you do not have permission to read it. Upload it again.")
+        data = _decode_b64_image(encoded)
+        content_type = _image_mime(data)
+        fingerprint = hashlib.sha256(data).digest()
+        if fingerprint in seen:
+            continue
+        seen.add(fingerprint)
+        total += len(data)
+        if total > 64 * 1024 * 1024:
+            raise ImageStudioError("Reference images exceed 64 MB in total. Upload smaller images.")
+        references.append((data, content_type))
+    return references
 
 
 def _find_image_result(response_json: dict) -> tuple[str, str]:
@@ -145,6 +219,8 @@ def _find_image_result(response_json: dict) -> tuple[str, str]:
 def _decode_b64_image(encoded: str) -> bytes:
     if encoded.startswith("data:image/"):
         encoded = encoded.split(",", 1)[-1]
+    if len(encoded) > (32 * 1024 * 1024 + 2) // 3 * 4:
+        raise ImageStudioError("Azure or the reference upload returned an image larger than 32 MB.")
     try:
         decoded = base64.b64decode(encoded, validate=True)
     except (binascii.Error, ValueError):
@@ -201,6 +277,10 @@ class Pipe:
         )
 
     class UserValves(BaseModel):
+        USE_PREVIOUS_IMAGE: bool = Field(
+            default=True,
+            description="For Sunburst, use the last generated image when no new reference is attached. Turn off for fresh generations in the same chat.",
+        )
         IMAGE_SIZE: Literal[
             "1024x1024", "1536x1920", "1536x1024",
             "1024x1536", "1152x2048", "2048x1152"
@@ -260,13 +340,15 @@ class Pipe:
             "or set SHARED_AZURE_KEY in this Pipe's admin Valves."
         )
 
-    async def _generate(self, *, model: str, prompt: str, size: str, quality: str, request=None):
+    async def _generate(self, *, model: str, prompt: str, size: str, quality: str, request=None, references=None):
         if model not in {"sunburst", "flux"}:
             raise ImageStudioError("Select a supported Tripz Image model.")
         if size not in IMAGE_SIZES:
             raise ImageStudioError("Unsupported size; choose a preset in the model's Valves.")
         width, height = map(int, size.split("x"))
         is_flux = model == "flux"
+        if is_flux and references:
+            raise ImageStudioError("Select GPT Image 2.5 Sunburst for reference-image edits in this integration.")
         url = _safe_endpoint(
             os.getenv("TRIPZ_FLUX_ENDPOINT", self.valves.FLUX_ENDPOINT)
             if is_flux else os.getenv("TRIPZ_SUNBURST_ENDPOINT", self.valves.SUNBURST_ENDPOINT),
@@ -295,11 +377,22 @@ class Pipe:
             async with httpx.AsyncClient(
                 timeout=httpx.Timeout(240.0, connect=20.0), follow_redirects=False
             ) as client:
-                response = await client.post(
-                    url,
-                    headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-                    json=payload,
-                )
+                if references:
+                    parsed = urlparse(url)
+                    url = parsed._replace(path=parsed.path.removesuffix("/generations") + "/edits").geturl()
+                    suffixes = {"image/png": "png", "image/jpeg": "jpg", "image/webp": "webp"}
+                    uploads = [("image[]", (f"reference-{i}.{suffixes[mime]}", data, mime))
+                               for i, (data, mime) in enumerate(references, 1)]
+                    response = await client.post(
+                        url, headers={"Authorization": f"Bearer {key}"},
+                        data={name: str(value) for name, value in payload.items()}, files=uploads,
+                    )
+                else:
+                    response = await client.post(
+                        url,
+                        headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+                        json=payload,
+                    )
                 if response.status_code >= 400:
                     self._raise_http_error(response.status_code, is_flux)
                 if response.status_code >= 300:
@@ -351,10 +444,6 @@ class Pipe:
         # Title, tag and follow-up generation are not image requests.
         if __task__:
             return ""
-        if __files__:
-            raise ImageStudioError(
-                "This version generates new images from text. Reference-image editing is not enabled yet."
-            )
         model_id = str(body.get("model", ""))
         model_suffix = model_id.rsplit(".", 1)[-1]
         if model_suffix not in {"sunburst", "flux"}:
@@ -380,14 +469,30 @@ class Pipe:
             )
 
         label = "FLUX.2 Pro" if model_suffix == "flux" else "GPT Image 2.5 Sunburst"
-        await self._emit(__event_emitter__, f"Generating with {label} at {options.IMAGE_SIZE}...", False)
         try:
+            from open_webui.models.users import Users
+
+            user = Users.get_user_by_id(__user__["id"])
+            if inspect.isawaitable(user):
+                user = await user
+            if user is None:
+                raise ImageStudioError("Could not resolve your Open WebUI user account.")
+            sources = _reference_sources(
+                body.get("messages") or [], __files__,
+                model_suffix == "sunburst" and options.USE_PREVIOUS_IMAGE,
+            )
+            if sources and model_suffix == "flux":
+                raise ImageStudioError("Select GPT Image 2.5 Sunburst for reference-image edits in this integration.")
+            references = await _load_references(sources, user)
+            action = f"Editing with {len(references)} reference image(s) using" if references else "Generating with"
+            await self._emit(__event_emitter__, f"{action} {label} at {options.IMAGE_SIZE}...", False)
             kind, image_value = await self._generate(
                 model=model_suffix,
                 prompt=prompt,
                 size=options.IMAGE_SIZE,
                 quality=options.SUNBURST_QUALITY,
                 request=__request__,
+                references=references,
             )
             if kind == "base64":
                 data = _decode_b64_image(image_value)
@@ -404,19 +509,13 @@ class Pipe:
             if len(data) > 32 * 1024 * 1024:
                 raise ImageStudioError("Image exceeds the 32 MB safety limit.")
             content_type = _image_mime(data)
-            from open_webui.models.users import Users
             from open_webui.routers.images import upload_image
-
-            user = Users.get_user_by_id(__user__["id"])
-            if inspect.isawaitable(user):
-                user = await user
-            if user is None:
-                raise ImageStudioError("Could not resolve your Open WebUI user account.")
 
             with Image.open(io.BytesIO(data)) as generated:
                 actual_size = f"{generated.width}x{generated.height}"
             metadata = {"model": label, "size": actual_size, "requested_size": options.IMAGE_SIZE,
-                        "prompt": prompt, "source": "tripz_image_studio"}
+                        "prompt": prompt, "source": "tripz_image_studio",
+                        "operation": "edit" if references else "generate", "reference_count": len(references)}
             if __chat_id__ and __message_id__:
                 metadata.update({"chat_id": __chat_id__, "message_id": __message_id__})
             saved = upload_image(
