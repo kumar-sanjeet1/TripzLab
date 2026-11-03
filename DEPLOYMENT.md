@@ -32,8 +32,9 @@ It preserves unrelated functions and stored Valve settings. It never prints keys
 
 ## Railway staging, after local checks pass
 
-Use a dedicated staging service. The included `railway.toml` selects the Dockerfile,
-`/health`, one replica, and bounded restart attempts. Required service settings:
+Use a dedicated staging service. Railway detects the root Dockerfile automatically.
+Configure the service health check as `/health` with a 300-second timeout, one
+replica, and at most three restart attempts. Required service settings:
 
 | Setting | Value |
 | --- | --- |
@@ -82,8 +83,8 @@ Automated tests cover request routing, format isolation, key precedence, older
 helper compatibility, auxiliary-task suppression, error handling, installer
 guards, and bootstrap idempotence. These use simulated Azure/Open WebUI responses.
 They do not prove either deployment works with the resource's real credentials.
-Docker build/runtime validation is still pending because this workspace has no
-Docker daemon. Record deployment verification separately from provider-generation verification. Azure credentials are configured in the service environment.
+The local workspace has no Docker daemon; verify the actual image build and
+runtime through the target Railway deployment. Record deployment verification separately from provider-generation verification. Azure credentials are configured in the service environment.
 
 Official references:
 
