@@ -1,0 +1,8 @@
+.env
+.env.local
+*.pyc
+__pycache__/
+.pytest_cache/
+tripz_image_studio_backup_*.py
+test-output/
+.venv/

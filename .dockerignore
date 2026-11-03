@@ -1,0 +1,10 @@
+.env
+.env.*
+!.env.example
+__pycache__
+.pytest_cache
+.venv
+tests
+test-output
+tripz_image_studio_backup_*.py
+*.zip

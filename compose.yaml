@@ -1,0 +1,13 @@
+services:
+  open-webui:
+    build: .
+    ports:
+      - "127.0.0.1:8081:8080"
+    env_file: .env
+    environment:
+      DATA_DIR: /app/backend/data
+    volumes:
+      - tripz_studio_data:/app/backend/data
+    restart: unless-stopped
+volumes:
+  tripz_studio_data:
